@@ -537,8 +537,12 @@ def ingest_data_v2():
         })
         
     except Exception as e:
-        print(f"[Error] {str(e)}")
+        import traceback
+        print("\n\n========== ERROR EN /api/ingest/v2 ==========")
+        print(traceback.format_exc())   # <-- ESTO SI MUESTRA EL ERROR REAL
+        print("===========================================\n\n")
         return jsonify({'error': str(e)}), 500
+
 
 
 @app.route('/api/equipos/todos', methods=['GET'])
