@@ -1,10 +1,10 @@
 import os
 
 DB_CONFIG = {
-    'host': os.getenv('MYSQLHOST', 'localhost'),
+    'host': os.getenv('MYSQLHOST', 'mysql.railway.internal'),
     'user': os.getenv('MYSQLUSER', 'root'),
-    'password': os.getenv('MYSQLPASSWORD', ''),
-    'database': os.getenv('MYSQLDATABASE', 'iot_predictivo'),
+    'password': os.getenv('MYSQLPASSWORD', 'JiovSYYIqOzeYQMJvBNbfdspEAfPyOYt'),
+    'database': os.getenv('MYSQLDATABASE', 'railway'),
     'port': int(os.getenv('MYSQLPORT', 3306))
 }
 
