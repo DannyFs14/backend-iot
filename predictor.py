@@ -1,112 +1,138 @@
-import numpy as np
+from datetime import datetime
 from config import THRESHOLDS
 
-def calculate_risk_score(temperature, humidity, current):
-    """
-    Calcula el puntaje de riesgo basado en los valores de sensores
-    Retorna un valor entre 0 (sin riesgo) y 1 (riesgo crítico)
-    """
-    # Normalizar valores
-    temp_norm = min(temperature / THRESHOLDS['temperature_max'], 1.5)
-    humidity_norm = min(humidity / THRESHOLDS['humidity_max'], 1.5)
-    current_norm = min(abs(current) / THRESHOLDS['current_max'], 1.5)
-    
-    # Pesos para cada factor
-    weights = {
-        'temperature': 0.35,
-        'humidity': 0.25,
-        'current': 0.40
-    }
-    
-    # Calcular riesgo ponderado
-    risk_score = (
-        temp_norm * weights['temperature'] +
-        humidity_norm * weights['humidity'] +
-        current_norm * weights['current']
-    )
-    
-    # Limitar entre 0 y 1
-    return min(max(risk_score, 0), 1)
-
-def determine_risk_level(risk_score):
-    """Determina el nivel de riesgo basado en el puntaje"""
-    if risk_score >= THRESHOLDS['risk_critical']:
-        return 'critical'
-    elif risk_score >= THRESHOLDS['risk_high']:
-        return 'high'
-    elif risk_score >= 0.3:
-        return 'medium'
-    else:
-        return 'low'
-
-def calculate_influential_factors(temperature, humidity, current):
-    """
-    Calcula qué factores son más influyentes en el riesgo
-    Retorna un string JSON con los porcentajes
-    """
-    import json
-    
-    # Calcular desviación de cada parámetro respecto al umbral
-    temp_impact = min((temperature / THRESHOLDS['temperature_max']) * 100, 100)
-    humidity_impact = min((humidity / THRESHOLDS['humidity_max']) * 100, 100)
-    current_impact = min((abs(current) / THRESHOLDS['current_max']) * 100, 100)
-    
-    factors = {
-        'Temperatura': round(temp_impact, 1),
-        'Humedad': round(humidity_impact, 1),
-        'Corriente': round(current_impact, 1)
-    }
-    
-    return json.dumps(factors)
-
 def make_prediction(temperature, humidity, current):
-    """
-    Realiza una predicción completa basada en los datos de sensores
-    Retorna un diccionario con el nivel de riesgo, probabilidad y factores
-    """
-    risk_score = calculate_risk_score(temperature, humidity, current)
-    risk_level = determine_risk_level(risk_score)
-    factors = calculate_influential_factors(temperature, humidity, current)
+    """Hace una prediccion basada en los datos de los sensores"""
+    
+    # Calcular nivel de riesgo y probabilidad
+    risk_level, failure_probability = calculate_risk_level(temperature, humidity, current)
+    
+    # Determinar factores influyentes
+    influential_factors = identify_influential_factors(temperature, humidity, current)
     
     return {
         'risk_level': risk_level,
-        'failure_probability': round(risk_score, 3),
-        'influential_factors': factors
+        'failure_probability': failure_probability,
+        'influential_factors': influential_factors,
+        'timestamp': datetime.now().isoformat()
     }
 
-def check_alerts(temperature, humidity, current, risk_level):
-    """
-    Verifica si se deben generar alertas basadas en los valores
-    Retorna una lista de alertas
-    """
-    alerts = []
+
+def calculate_risk_level(temperature, humidity, current):
+    """Calcula el nivel de riesgo basado en umbrales"""
+    
+    # Contar cuantos factores estan en zona critica o warning
+    factores_criticos = 0
+    factores_warning = 0
+    
+    # Temperatura
+    if temperature >= 45:  # Critico
+        factores_criticos += 1
+    elif temperature >= 35:  # Warning
+        factores_warning += 1
+    
+    # Humedad
+    if humidity >= 85:  # Critico
+        factores_criticos += 1
+    elif humidity >= 70:  # Warning
+        factores_warning += 1
+    
+    # Corriente
+    if abs(current) >= 10:  # Critico
+        factores_criticos += 1
+    elif abs(current) >= 5:  # Warning
+        factores_warning += 1
+    
+    # Determinar nivel de riesgo
+    if factores_criticos >= 2:
+        return 'critico', 100.0
+    elif factores_criticos >= 1:
+        return 'alto', 80.0
+    elif factores_warning >= 2:
+        return 'medio', 50.0
+    elif factores_warning >= 1:
+        return 'bajo', 20.0
+    else:
+        return 'bajo', 5.0
+
+
+def identify_influential_factors(temperature, humidity, current):
+    """Identifica los factores mas influyentes"""
+    factors = []
     
     if temperature > THRESHOLDS['temperature_max']:
-        alerts.append({
-            'type': 'high_temperature',
-            'message': f'Temperatura crítica: {temperature}°C',
-            'severity': 'critical'
-        })
+        factors.append('Temperatura elevada')
     
     if humidity > THRESHOLDS['humidity_max']:
-        alerts.append({
-            'type': 'high_humidity',
-            'message': f'Humedad elevada: {humidity}%',
-            'severity': 'warning'
-        })
+        factors.append('Humedad elevada')
     
     if abs(current) > THRESHOLDS['current_max']:
+        factors.append('Corriente elevada')
+    
+    if not factors:
+        factors.append('Condiciones normales')
+    
+    return ', '.join(factors)
+
+
+def check_alerts(temperature, humidity, current, risk_level):
+    """Verifica si se deben generar alertas"""
+    alerts = []
+    
+    # Alerta por temperatura
+    if temperature >= 45:
         alerts.append({
-            'type': 'high_current',
-            'message': f'Corriente anormal: {current}A',
-            'severity': 'critical'
+            'type': 'temperature',
+            'message': f'Temperatura critica: {temperature}°C',
+            'severity': 'critico'
+        })
+    elif temperature >= 35:
+        alerts.append({
+            'type': 'temperature',
+            'message': f'Temperatura elevada: {temperature}°C',
+            'severity': 'advertencia'
         })
     
-    if risk_level == 'critical':
+    # Alerta por humedad
+    if humidity >= 85:
         alerts.append({
-            'type': 'system_failure_risk',
-            'message': 'Riesgo crítico de fallo del sistema',
-            'severity': 'critical'
+            'type': 'humidity',
+            'message': f'Humedad critica: {humidity}%',
+            'severity': 'critico'
+        })
+    elif humidity >= 70:
+        alerts.append({
+            'type': 'humidity',
+            'message': f'Humedad elevada: {humidity}%',
+            'severity': 'advertencia'
+        })
+    
+    # Alerta por corriente
+    if abs(current) >= 10:
+        alerts.append({
+            'type': 'current',
+            'message': f'Corriente critica: {current}A',
+            'severity': 'critico'
+        })
+    elif abs(current) >= 5:
+        alerts.append({
+            'type': 'current',
+            'message': f'Corriente elevada: {current}A',
+            'severity': 'advertencia'
+        })
+    
+    # Alerta por nivel de riesgo general
+    if risk_level == 'critico':
+        alerts.append({
+            'type': 'system',
+            'message': 'Sistema en estado critico - Revision inmediata requerida',
+            'severity': 'critico'
+        })
+    elif risk_level == 'alto':
+        alerts.append({
+            'type': 'system',
+            'message': 'Riesgo alto detectado - Monitoreo cercano recomendado',
+            'severity': 'advertencia'
         })
     
     return alerts

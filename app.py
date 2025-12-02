@@ -67,12 +67,10 @@ def ingest_data():
         return jsonify({'error': str(e)}), 500
     
 
-
 @app.route('/api/dashboard', methods=['GET'])
 def get_dashboard():
     """Obtiene datos para el dashboard, filtrado por equipo si se especifica"""
     try:
-        # <CHANGE> Obtener el parametro equipo_id de la query string
         equipo_id = request.args.get('equipo_id')
         
         print(f"[API Dashboard] Solicitado para equipo_id: {equipo_id}")
@@ -82,19 +80,23 @@ def get_dashboard():
             return jsonify({'error': 'No hay conexion a la base de datos'}), 500
         
         with connection.cursor() as cursor:
-            # <CHANGE> Filtrar por equipo_id si se especifica
+            # <CHANGE> Hacer JOIN con predicciones para obtener el nivel de riesgo
             if equipo_id:
                 sql = """
-                    SELECT * FROM lecturas_sensores 
-                    WHERE sensor_id = %s
-                    ORDER BY timestamp DESC LIMIT 1
+                    SELECT ls.*, p.nivel_riesgo, p.riesgo_predicho
+                    FROM lecturas_sensores ls
+                    LEFT JOIN predicciones p ON ls.id = p.lectura_id
+                    WHERE ls.sensor_id = %s
+                    ORDER BY ls.timestamp DESC LIMIT 1
                 """
                 cursor.execute(sql, (equipo_id,))
                 print(f"[API Dashboard] Filtrando por sensor_id: {equipo_id}")
             else:
                 sql = """
-                    SELECT * FROM lecturas_sensores 
-                    ORDER BY timestamp DESC LIMIT 1
+                    SELECT ls.*, p.nivel_riesgo, p.riesgo_predicho
+                    FROM lecturas_sensores ls
+                    LEFT JOIN predicciones p ON ls.id = p.lectura_id
+                    ORDER BY ls.timestamp DESC LIMIT 1
                 """
                 cursor.execute(sql)
                 print(f"[API Dashboard] Sin filtro, obteniendo ultima lectura general")
@@ -102,19 +104,20 @@ def get_dashboard():
             current_reading = cursor.fetchone()
             
             if current_reading:
-                print(f"[API Dashboard] Lectura obtenida - Sensor: {current_reading.get('sensor_id')}, Temp: {current_reading.get('temperatura')}")
+                print(f"[API Dashboard] Lectura obtenida - Sensor: {current_reading.get('sensor_id')}, Temp: {current_reading.get('temperatura')}, Riesgo: {current_reading.get('nivel_riesgo')}")
             
-            # <CHANGE> Filtrar alertas por equipo_id si se especifica
+            # Filtrar alertas por equipo_id si se especifica
             if equipo_id:
                 sql_alerts = """
                     SELECT * FROM alertas 
-                    WHERE equipo_id = %s
+                    WHERE equipo_id = %s AND (estado != 'resuelto' OR estado IS NULL)
                     ORDER BY timestamp DESC LIMIT 10
                 """
                 cursor.execute(sql_alerts, (equipo_id,))
             else:
                 sql_alerts = """
                     SELECT * FROM alertas 
+                    WHERE estado != 'resuelto' OR estado IS NULL
                     ORDER BY timestamp DESC LIMIT 10
                 """
                 cursor.execute(sql_alerts)
@@ -129,7 +132,7 @@ def get_dashboard():
                     'temperature': 0,
                     'humidity': 0,
                     'current': 0,
-                    'risk_level': 'low',
+                    'risk_level': 'bajo',
                     'failure_probability': 0
                 },
                 'alerts': []
@@ -138,11 +141,11 @@ def get_dashboard():
         # Formatear respuesta
         response = {
             'current': {
-                'temperature': current_reading['temperatura'],
-                'humidity': current_reading['humedad'],
-                'current': current_reading['corriente'],
-                'risk_level': current_reading.get('nivel_riesgo', 'low'),
-                'failure_probability': current_reading.get('riesgo_predicho', 0)
+                'temperature': float(current_reading['temperatura']),
+                'humidity': float(current_reading['humedad']),
+                'current': float(current_reading['corriente']),
+                'risk_level': current_reading.get('nivel_riesgo', 'bajo'),
+                'failure_probability': float(current_reading.get('riesgo_predicho', 0))
             },
             'alerts': [{
                 'id': a['id'],
@@ -161,7 +164,6 @@ def get_dashboard():
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
-
 
 
 
