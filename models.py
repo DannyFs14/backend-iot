@@ -130,48 +130,33 @@ def get_active_alerts():
     finally:
         connection.close()
 
-
-
 def authenticate_user(email, password):
-    """Autentica un usuario y obtiene su equipo asignado"""
+    """Autentica un usuario"""
     connection = get_db_connection()
     if not connection:
         return None
     
     try:
         with connection.cursor() as cursor:
-            # <CHANGE> Hacer JOIN con equipos para obtener equipo_id
-            sql = """
-                SELECT u.*, e.equipo_id 
-                FROM usuarios u
-                LEFT JOIN equipos e ON e.operador_id = u.id
-                WHERE u.email = %s AND u.password_hash = %s
-            """
+            sql = "SELECT * FROM usuarios WHERE email = %s AND password_hash = %s"
             print(f"[Auth] Buscando usuario: {email}")
             cursor.execute(sql, (email, password))
             user = cursor.fetchone()
             if user:
-                print(f"[Auth] Usuario encontrado: {user['nombre']}, Equipo: {user.get('equipo_id')}")
+                print(f"[Auth] Usuario encontrado: {user['nombre']}")
                 return {
                     'id': user['id'],
                     'name': user['nombre'],
                     'email': user['email'],
-                    'role': user['rol'],
-                    'equipo_id': user.get('equipo_id')  # <CHANGE> Incluir equipo_id
+                    'role': user['rol']
                 }
             print(f"[Auth] Usuario no encontrado o contraseña incorrecta")
             return None
     except Exception as e:
         print(f"Error autenticando usuario: {e}")
-        import traceback
-        traceback.print_exc()
         return None
     finally:
         connection.close()
-
-
-
-
 
 def get_filtered_readings(start_date=None, end_date=None):
     """Obtiene lecturas filtradas por fecha"""

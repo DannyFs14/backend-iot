@@ -6,7 +6,6 @@ import predictor
 
 app = Flask(__name__)
 CORS(app)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -68,103 +67,50 @@ def ingest_data():
         return jsonify({'error': str(e)}), 500
     
 
+
+
 @app.route('/api/dashboard', methods=['GET'])
-def get_dashboard():
-    """Obtiene datos para el dashboard, filtrado por equipo si se especifica"""
+def get_dashboard_data():
+    """Obtiene los datos para el dashboard de la aplicación web"""
     try:
-        equipo_id = request.args.get('equipo_id')
+        latest_readings = models.get_latest_readings(limit=1)
         
-        print(f"[API Dashboard] Solicitado para equipo_id: {equipo_id}")
+        if not latest_readings:
+            return jsonify({'error': 'No hay datos disponibles'}), 404
         
-        connection = models.get_db_connection()
-        if not connection:
-            return jsonify({'error': 'No hay conexion a la base de datos'}), 500
+        current_reading = latest_readings[0]
         
-        with connection.cursor() as cursor:
-            # <CHANGE> Hacer JOIN con predicciones para obtener el nivel de riesgo
-            if equipo_id:
-                sql = """
-                    SELECT ls.*, p.nivel_riesgo, p.riesgo_predicho
-                    FROM lecturas_sensores ls
-                    LEFT JOIN predicciones p ON ls.id = p.lectura_id
-                    WHERE ls.sensor_id = %s
-                    ORDER BY ls.timestamp DESC LIMIT 1
-                """
-                cursor.execute(sql, (equipo_id,))
-                print(f"[API Dashboard] Filtrando por sensor_id: {equipo_id}")
-            else:
-                sql = """
-                    SELECT ls.*, p.nivel_riesgo, p.riesgo_predicho
-                    FROM lecturas_sensores ls
-                    LEFT JOIN predicciones p ON ls.id = p.lectura_id
-                    ORDER BY ls.timestamp DESC LIMIT 1
-                """
-                cursor.execute(sql)
-                print(f"[API Dashboard] Sin filtro, obteniendo ultima lectura general")
-            
-            current_reading = cursor.fetchone()
-            
-            if current_reading:
-                print(f"[API Dashboard] Lectura obtenida - Sensor: {current_reading.get('sensor_id')}, Temp: {current_reading.get('temperatura')}, Riesgo: {current_reading.get('nivel_riesgo')}")
-            
-            # Filtrar alertas por equipo_id si se especifica
-            if equipo_id:
-                sql_alerts = """
-                    SELECT * FROM alertas 
-                    WHERE equipo_id = %s AND (estado != 'resuelto' OR estado IS NULL)
-                    ORDER BY timestamp DESC LIMIT 10
-                """
-                cursor.execute(sql_alerts, (equipo_id,))
-            else:
-                sql_alerts = """
-                    SELECT * FROM alertas 
-                    WHERE estado != 'resuelto' OR estado IS NULL
-                    ORDER BY timestamp DESC LIMIT 10
-                """
-                cursor.execute(sql_alerts)
-            
-            alerts = cursor.fetchall()
+        # <CHANGE> Obtener alertas no resueltas (estado != 'resuelto')
+        alerts_raw = models.get_dashboard_alerts()
         
-        connection.close()
-        
-        if not current_reading:
-            return jsonify({
-                'current': {
-                    'temperature': 0,
-                    'humidity': 0,
-                    'current': 0,
-                    'risk_level': 'bajo',
-                    'failure_probability': 0
-                },
-                'alerts': []
-            })
-        
-        # Formatear respuesta
-        response = {
-            'current': {
-                'temperature': float(current_reading['temperatura']),
-                'humidity': float(current_reading['humedad']),
-                'current': float(current_reading['corriente']),
-                'risk_level': current_reading.get('nivel_riesgo', 'bajo'),
-                'failure_probability': float(current_reading.get('riesgo_predicho', 0))
-            },
-            'alerts': [{
+        # <CHANGE> Formatear alertas al formato que espera el frontend
+        formatted_alerts = []
+        for a in alerts_raw:
+            formatted_alerts.append({
                 'id': a['id'],
                 'alert_type': a.get('tipo', ''),
                 'message': a.get('mensaje', ''),
-                'severity': a.get('severidad', ''),
+                'severity': a.get('severidad', 'warning'),
                 'timestamp': a['timestamp'].isoformat() if a.get('timestamp') else None,
                 'status': a.get('estado', 'pendiente')
-            } for a in alerts]
-        }
+            })
         
-        return jsonify(response)
+        return jsonify({
+            'current': {
+                'temperature': current_reading['temperatura'],
+                'humidity': current_reading['humedad'],
+                'current': current_reading['corriente'],
+                'risk_level': current_reading.get('nivel_riesgo', 'unknown'),
+                'failure_probability': current_reading.get('riesgo_predicho', 0)
+            },
+            'alerts': formatted_alerts
+        })
         
     except Exception as e:
         print(f"[Error Dashboard] {str(e)}")
-        import traceback
-        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
 
 
 
@@ -591,121 +537,65 @@ def ingest_data_v2():
         })
         
     except Exception as e:
-        import traceback
-        print("\n\n========== ERROR EN /api/ingest/v2 ==========")
-        print(traceback.format_exc())   # <-- ESTO SI MUESTRA EL ERROR REAL
-        print("===========================================\n\n")
+        print(f"[Error] {str(e)}")
         return jsonify({'error': str(e)}), 500
-
-
 
 
 @app.route('/api/equipos/todos', methods=['GET'])
-def get_equipos_todos():
-    """Obtiene todos los equipos con su estado actual para el Panel TI"""
+def get_all_equipos():
+    """Obtiene todos los equipos con su estado actual (para TI)"""
     try:
-        print("[API Equipos Todos] Obteniendo todos los equipos")
+        equipos = models.get_all_equipos()
         
-        connection = models.get_db_connection()
-        if not connection:
-            return jsonify({'error': 'No hay conexion'}), 500
-        
-        with connection.cursor() as cursor:
-            # Obtener todos los equipos
-            sql_equipos = """
-                SELECT 
-                    e.id,
-                    e.equipo_id,
-                    e.nombre,
-                    e.ubicacion,
-                    e.area,
-                    e.activo,
-                    e.ultima_conexion,
-                    u.nombre as operador_nombre,
-                    u.email as operador_email
-                FROM equipos e
-                LEFT JOIN usuarios u ON e.operador_id = u.id
-                ORDER BY e.nombre
-            """
-            cursor.execute(sql_equipos)
-            equipos_raw = cursor.fetchall()
+        result = []
+        for eq in equipos:
+            # Obtener estado actual del equipo
+            status = models.get_equipo_status(eq['equipo_id'])
             
-            equipos = []
-            for eq in equipos_raw:
-                equipo_id = eq['equipo_id']
+            equipo_data = {
+                'id': eq['id'],
+                'equipo_id': eq['equipo_id'],
+                'nombre': eq['nombre'],
+                'ubicacion': eq['ubicacion'],
+                'area': eq['area'],
+                'operador': eq.get('operador_nombre', 'Sin asignar'),
+                'alertas_activas': eq.get('alertas_activas', 0),
+                'ultima_conexion': eq['ultima_conexion'].isoformat() if eq.get('ultima_conexion') else None,
+                'activo': eq['activo']
+            }
+            
+            # Agregar datos de sensores si hay lectura reciente
+            if status and status.get('lectura'):
+                lectura = status['lectura']
+                equipo_data['temperatura'] = lectura.get('temperatura')
+                equipo_data['humedad'] = lectura.get('humedad')
+                equipo_data['corriente'] = lectura.get('corriente')
+                equipo_data['nivel_riesgo'] = lectura.get('nivel_riesgo', 'unknown')
+                equipo_data['riesgo_predicho'] = lectura.get('riesgo_predicho', 0)
                 
-                # Obtener ultima lectura con su prediccion
-                sql_lectura = """
-                    SELECT ls.*, p.nivel_riesgo, p.riesgo_predicho
-                    FROM lecturas_sensores ls
-                    LEFT JOIN predicciones p ON ls.id = p.lectura_id
-                    WHERE ls.sensor_id = %s
-                    ORDER BY ls.timestamp DESC
-                    LIMIT 1
-                """
-                cursor.execute(sql_lectura, (equipo_id,))
-                lectura = cursor.fetchone()
-                
-                # Contar alertas activas
-                sql_alertas = """
-                    SELECT COUNT(*) as total
-                    FROM alertas 
-                    WHERE equipo_id = %s AND (estado != 'resuelto' OR estado IS NULL)
-                """
-                cursor.execute(sql_alertas, (equipo_id,))
-                alertas_result = cursor.fetchone()
-                
-                # Determinar si esta online
-                is_online = False
-                if lectura and lectura.get('timestamp'):
+                # Determinar si esta online (ultima lectura < 30 segundos)
+                if lectura.get('timestamp'):
                     from datetime import datetime, timedelta
                     ahora = datetime.now()
                     ultima = lectura['timestamp']
-                    is_online = (ahora - ultima).total_seconds() < 30
-                
-                equipo_data = {
-                    'id': eq['id'],
-                    'equipo_id': equipo_id,
-                    'nombre': eq['nombre'],
-                    'ubicacion': eq['ubicacion'],
-                    'operador_nombre': eq.get('operador_nombre'),
-                    'operador_email': eq.get('operador_email'),
-                    'estado': 'online' if is_online else 'offline',
-                    'is_online': is_online,
-                    'ultima_conexion': eq['ultima_conexion'].isoformat() if eq.get('ultima_conexion') else None,
-                    'alertas_activas': alertas_result['total'] if alertas_result else 0,
-                    'datos_actuales': None
-                }
-                
-                if lectura:
-                    # <CHANGE> Asegurar que devolvemos el nivel de riesgo correcto
-                    nivel_riesgo = lectura.get('nivel_riesgo', 'bajo')
-                    if not nivel_riesgo or nivel_riesgo == '':
-                        nivel_riesgo = 'bajo'
-                    
-                    equipo_data['datos_actuales'] = {
-                        'temperatura': float(lectura.get('temperatura', 0)),
-                        'humedad': float(lectura.get('humedad', 0)),
-                        'corriente': float(lectura.get('corriente', 0)),
-                        'nivel_riesgo': nivel_riesgo,
-                        'riesgo_predicho': float(lectura.get('riesgo_predicho', 0)),
-                        'timestamp': lectura['timestamp'].isoformat() if lectura.get('timestamp') else None
-                    }
-                
-                equipos.append(equipo_data)
+                    equipo_data['online'] = (ahora - ultima).total_seconds() < 30
+                else:
+                    equipo_data['online'] = False
+            else:
+                equipo_data['online'] = False
+                equipo_data['temperatura'] = None
+                equipo_data['humedad'] = None
+                equipo_data['corriente'] = None
+                equipo_data['nivel_riesgo'] = 'unknown'
+                equipo_data['riesgo_predicho'] = 0
+            
+            result.append(equipo_data)
         
-        connection.close()
-        
-        print(f"[API Equipos Todos] Devolviendo {len(equipos)} equipos")
-        return jsonify({'equipos': equipos})
+        return jsonify({'equipos': result})
         
     except Exception as e:
-        print(f"[Error Equipos Todos] {str(e)}")
-        import traceback
-        traceback.print_exc()
+        print(f"[Error Equipos] {str(e)}")
         return jsonify({'error': str(e)}), 500
-    
-
 
 
 @app.route('/api/equipos/<equipo_id>', methods=['GET'])
