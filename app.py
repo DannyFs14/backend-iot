@@ -67,23 +67,71 @@ def ingest_data():
         return jsonify({'error': str(e)}), 500
     
 
-
-
 @app.route('/api/dashboard', methods=['GET'])
 def get_dashboard_data():
     """Obtiene los datos para el dashboard de la aplicación web"""
     try:
-        latest_readings = models.get_latest_readings(limit=1)
+        # <CHANGE> Obtener equipo_id de los query parameters
+        equipo_id = request.args.get('equipo_id')
         
-        if not latest_readings:
-            return jsonify({'error': 'No hay datos disponibles'}), 404
+        print(f"[API Dashboard] Solicitado para equipo_id: {equipo_id}")
         
-        current_reading = latest_readings[0]
+        connection = models.get_db_connection()
+        if not connection:
+            return jsonify({'error': 'No hay conexion'}), 500
         
-        # <CHANGE> Obtener alertas no resueltas (estado != 'resuelto')
-        alerts_raw = models.get_dashboard_alerts()
+        with connection.cursor() as cursor:
+            # <CHANGE> Filtrar por equipo_id si se especifica
+            if equipo_id:
+                sql = """
+                    SELECT ls.*, p.nivel_riesgo, p.riesgo_predicho
+                    FROM lecturas_sensores ls
+                    LEFT JOIN predicciones p ON ls.id = p.lectura_id
+                    WHERE ls.sensor_id = %s
+                    ORDER BY ls.timestamp DESC
+                    LIMIT 1
+                """
+                cursor.execute(sql, (equipo_id,))
+                print(f"[API Dashboard] Filtrando por sensor_id: {equipo_id}")
+            else:
+                sql = """
+                    SELECT ls.*, p.nivel_riesgo, p.riesgo_predicho
+                    FROM lecturas_sensores ls
+                    LEFT JOIN predicciones p ON ls.id = p.lectura_id
+                    ORDER BY ls.timestamp DESC
+                    LIMIT 1
+                """
+                cursor.execute(sql)
+                print(f"[API Dashboard] Sin filtro")
+            
+            current_reading = cursor.fetchone()
+            
+            if not current_reading:
+                return jsonify({'error': 'No hay datos disponibles'}), 404
+            
+            print(f"[API Dashboard] Lectura obtenida - Sensor: {current_reading.get('sensor_id')}, Temp: {current_reading.get('temperatura')}, Riesgo: {current_reading.get('nivel_riesgo')}")
+            
+            # <CHANGE> Filtrar alertas por equipo_id si se especifica
+            if equipo_id:
+                sql_alerts = """
+                    SELECT * FROM alertas 
+                    WHERE equipo_id = %s AND (estado != 'resuelto' OR estado IS NULL)
+                    ORDER BY timestamp DESC LIMIT 10
+                """
+                cursor.execute(sql_alerts, (equipo_id,))
+            else:
+                sql_alerts = """
+                    SELECT * FROM alertas 
+                    WHERE estado != 'resuelto' OR estado IS NULL
+                    ORDER BY timestamp DESC LIMIT 10
+                """
+                cursor.execute(sql_alerts)
+            
+            alerts_raw = cursor.fetchall()
         
-        # <CHANGE> Formatear alertas al formato que espera el frontend
+        connection.close()
+        
+        # Formatear alertas
         formatted_alerts = []
         for a in alerts_raw:
             formatted_alerts.append({
@@ -97,17 +145,19 @@ def get_dashboard_data():
         
         return jsonify({
             'current': {
-                'temperature': current_reading['temperatura'],
-                'humidity': current_reading['humedad'],
-                'current': current_reading['corriente'],
-                'risk_level': current_reading.get('nivel_riesgo', 'unknown'),
-                'failure_probability': current_reading.get('riesgo_predicho', 0)
+                'temperature': float(current_reading['temperatura']),
+                'humidity': float(current_reading['humedad']),
+                'current': float(current_reading['corriente']),
+                'risk_level': current_reading.get('nivel_riesgo', 'bajo'),
+                'failure_probability': float(current_reading.get('riesgo_predicho', 0))
             },
             'alerts': formatted_alerts
         })
         
     except Exception as e:
         print(f"[Error Dashboard] {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
